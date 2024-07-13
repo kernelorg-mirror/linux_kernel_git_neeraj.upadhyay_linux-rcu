@@ -38,7 +38,6 @@
 /* Exported common interfaces */
 void call_rcu(struct rcu_head *head, rcu_callback_t func);
 void rcu_barrier_tasks(void);
-void rcu_barrier_tasks_rude(void);
 void synchronize_rcu(void);
 
 struct rcu_gp_oldstate;
@@ -145,11 +144,18 @@ void rcu_init_nohz(void);
 int rcu_nocb_cpu_offload(int cpu);
 int rcu_nocb_cpu_deoffload(int cpu);
 void rcu_nocb_flush_deferred_wakeup(void);
+
+#define RCU_NOCB_LOCKDEP_WARN(c, s) RCU_LOCKDEP_WARN(c, s)
+
 #else /* #ifdef CONFIG_RCU_NOCB_CPU */
+
 static inline void rcu_init_nohz(void) { }
 static inline int rcu_nocb_cpu_offload(int cpu) { return -EINVAL; }
 static inline int rcu_nocb_cpu_deoffload(int cpu) { return 0; }
 static inline void rcu_nocb_flush_deferred_wakeup(void) { }
+
+#define RCU_NOCB_LOCKDEP_WARN(c, s)
+
 #endif /* #else #ifdef CONFIG_RCU_NOCB_CPU */
 
 /*
@@ -203,7 +209,6 @@ do {									\
 } while (0)
 
 # ifdef CONFIG_TASKS_RUDE_RCU
-void call_rcu_tasks_rude(struct rcu_head *head, rcu_callback_t func);
 void synchronize_rcu_tasks_rude(void);
 # endif
 
