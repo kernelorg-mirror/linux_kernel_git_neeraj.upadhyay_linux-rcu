@@ -93,6 +93,7 @@ config TASKS_RCU
 	bool
 	default NEED_TASKS_RCU && (PREEMPTION || PREEMPT_AUTO)
 	select IRQ_WORK
+	select CONTEXT_TRACKING_IDLE
 
 config FORCE_TASKS_RUDE_RCU
 	bool "Force selection of Tasks Rude RCU"
