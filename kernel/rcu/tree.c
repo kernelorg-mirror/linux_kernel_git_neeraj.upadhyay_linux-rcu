@@ -303,17 +303,16 @@ static void rcu_dynticks_eqs_online(void)
  * Return true if the snapshot returned from rcu_dynticks_snap()
  * indicates that RCU is in an extended quiescent state.
  */
-static bool rcu_dynticks_in_eqs(int snap)
+bool rcu_dynticks_in_eqs(int snap)
 {
 	return !(snap & RCU_DYNTICKS_IDX);
 }
 
 /*
- * Return true if the CPU corresponding to the specified rcu_data
- * structure has spent some time in an extended quiescent state since
- * rcu_dynticks_snap() returned the specified snapshot.
+ * Return true if the CPU has spent some time in an extended quiescent
+ * state since rcu_dynticks_snap() returned the specified snapshot.
  */
-static bool rcu_dynticks_in_eqs_since(struct rcu_data *rdp, int snap)
+bool rcu_dynticks_in_eqs_since(int cpu, int snap)
 {
 	/*
 	 * The first failing snapshot is already ordered against the accesses
@@ -323,7 +322,7 @@ static bool rcu_dynticks_in_eqs_since(struct rcu_data *rdp, int snap)
 	 * performed by the remote CPU prior to entering idle and therefore can
 	 * rely solely on acquire semantics.
 	 */
-	return snap != ct_dynticks_cpu_acquire(rdp->cpu);
+	return snap != ct_dynticks_cpu_acquire(cpu);
 }
 
 /*
@@ -815,7 +814,7 @@ static int rcu_implicit_dynticks_qs(struct rcu_data *rdp)
 	 * read-side critical section that started before the beginning
 	 * of the current RCU grace period.
 	 */
-	if (rcu_dynticks_in_eqs_since(rdp, rdp->dynticks_snap)) {
+	if (rcu_dynticks_in_eqs_since(rdp->cpu, rdp->dynticks_snap)) {
 		trace_rcu_fqs(rcu_state.name, rdp->gp_seq, rdp->cpu, TPS("dti"));
 		rcu_gpnum_ovf(rnp, rdp);
 		return 1;
