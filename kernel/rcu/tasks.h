@@ -35,6 +35,7 @@ typedef void (*postgp_func_t)(struct rcu_tasks *rtp);
  * @rtp_exit_list: List of tasks in the latter portion of do_exit().
  * @cpu: CPU number corresponding to this entry.
  * @rtpp: Pointer to the rcu_tasks structure.
+ * @rcu_watching_snap: Per-GP rcu watching tracking for idle tasks.
  */
 struct rcu_tasks_percpu {
 	struct rcu_segcblist cblist;
@@ -51,6 +52,7 @@ struct rcu_tasks_percpu {
 	int cpu;
 	int index;
 	struct rcu_tasks *rtpp;
+	int rcu_watching_snap;
 };
 
 /**
@@ -851,14 +853,15 @@ static void rcu_tasks_wait_gp(struct rcu_tasks *rtp)
 ////////////////////////////////////////////////////////////////////////
 //
 // Simple variant of RCU whose quiescent states are voluntary context
-// switch, cond_resched_tasks_rcu_qs(), user-space execution, and idle.
-// As such, grace periods can take one good long time.  There are no
-// read-side primitives similar to rcu_read_lock() and rcu_read_unlock()
-// because this implementation is intended to get the system into a safe
-// state for some of the manipulations involved in tracing and the like.
-// Finally, this implementation does not support high call_rcu_tasks()
-// rates from multiple CPUs.  If this is required, per-CPU callback lists
-// will be needed.
+// switch, cond_resched_tasks_rcu_qs(), user-space execution, and idle
+// tasks which are in RCU-idle context. As such, grace periods can take
+// one good long time.  There are no read-side primitives similar to
+// rcu_read_lock() and rcu_read_unlock() because this implementation is
+// intended to get the system into a safe state for some of the
+// manipulations involved in tracing and the like. Finally, this
+// implementation does not support high call_rcu_tasks() rates from
+// multiple CPUs.  If this is required, per-CPU callback lists will be
+// needed.
 //
 // The implementation uses rcu_tasks_wait_gp(), which relies on function
 // pointers in the rcu_tasks structure.  The rcu_spawn_tasks_kthread()
@@ -869,11 +872,13 @@ static void rcu_tasks_wait_gp(struct rcu_tasks *rtp)
 //	Invokes synchronize_rcu() in order to wait for all in-flight
 //	t->on_rq and t->nvcsw transitions to complete.	This works because
 //	all such transitions are carried out with interrupts disabled.
-// rcu_tasks_pertask(), invoked on every non-idle task:
-//	For every runnable non-idle task other than the current one, use
-//	get_task_struct() to pin down that task, snapshot that task's
-//	number of voluntary context switches, and add that task to the
-//	holdout list.
+// rcu_tasks_pertask(), invoked on every task:
+//	For idle task, snapshot the task's CPU's dynticks counter. If
+//	the CPU is in RCU-idle context, do not add it to the holdout list.
+//	For every runnable non-idle task other than the current one and
+//	idle tasks which are not in RCU-idle context, use get_task_struct()
+//	to pin down that task, snapshot that task's number of voluntary
+//	context switches, and add that task to the holdout list.
 // rcu_tasks_postscan():
 //	Gather per-CPU lists of tasks in do_exit() to ensure that all
 //	tasks that were in the process of exiting (and which thus might
@@ -932,36 +937,64 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 	if (!READ_ONCE(t->on_rq))
 		return false;
 
-	/*
-	 * Idle tasks (or idle injection) within the idle loop are RCU-tasks
-	 * quiescent states. But CPU boot code performed by the idle task
-	 * isn't a quiescent state.
-	 */
-	if (is_idle_task(t))
-		return false;
-
 	cpu = task_cpu(t);
 
-	/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
-	if (t == idle_task(cpu) && !rcu_cpu_online(cpu))
+
+	if (t == idle_task(cpu)) {
+		/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
+		if (!rcu_cpu_online(cpu))
+			return false;
+#ifdef CONFIG_SMP
+		/*
+		 * As idle tasks cannot be involuntary preempted, non-running idle tasks
+		 * are not in RCU-tasks critical section.
+		 * synchronize_rcu() calls in rcu_tasks_pregp_step() and rcu_tasks_postgp()
+		 * ensure that all ->on_cpu transitions are complete.
+		 */
+		if (!t->on_cpu)
+			return false;
+#else
+		/*
+		 * We are in rcu_tasks_kthread() context. Idle thread would
+		 * have done a voluntary context switch.
+		 */
 		return false;
+#endif
+	}
 
 	return true;
 }
 
+void call_rcu_tasks(struct rcu_head *rhp, rcu_callback_t func);
+DEFINE_RCU_TASKS(rcu_tasks, rcu_tasks_wait_gp, call_rcu_tasks, "RCU Tasks");
+
 /* Per-task initial processing. */
 static void rcu_tasks_pertask(struct task_struct *t, struct list_head *hop)
 {
+	int cpu = task_cpu(t);
+
 	if (t != current && rcu_tasks_is_holdout(t)) {
+#ifndef CONFIG_TINY_RCU
+		if (t == idle_task(cpu)) {
+			struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
+
+			/*
+			 * Do plain access. Ordering between remote CPU's pre idle accesses
+			 * and post rcu-tasks grace period is provided by synchronize_rcu()
+			 * in rcu_tasks_postgp().
+			 */
+			rtpcp->rcu_watching_snap = ct_rcu_watching_cpu(cpu);
+			/* RCU-idle contexts are RCU-tasks quiescent state for idle tasks. */
+			if (rcu_watching_snap_in_eqs(rtpcp->rcu_watching_snap))
+				return;
+		}
+#endif // #ifndef CONFIG_TINY_RCU
 		get_task_struct(t);
 		t->rcu_tasks_nvcsw = READ_ONCE(t->nvcsw);
 		WRITE_ONCE(t->rcu_tasks_holdout, true);
 		list_add(&t->rcu_tasks_holdout_list, hop);
 	}
 }
-
-void call_rcu_tasks(struct rcu_head *rhp, rcu_callback_t func);
-DEFINE_RCU_TASKS(rcu_tasks, rcu_tasks_wait_gp, call_rcu_tasks, "RCU Tasks");
 
 /* Processing between scanning taskslist and draining the holdout list. */
 static void rcu_tasks_postscan(struct list_head *hop)
@@ -1031,10 +1064,13 @@ static void rcu_tasks_postscan(struct list_head *hop)
 static void check_holdout_task(struct task_struct *t,
 			       bool needreport, bool *firstreport)
 {
-	int cpu;
+	int cpu = task_cpu(t);
+	struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
 
 	if (!READ_ONCE(t->rcu_tasks_holdout) ||
 	    t->rcu_tasks_nvcsw != READ_ONCE(t->nvcsw) ||
+	    ((t == idle_task(cpu)) &&
+	     rcu_watching_snap_stopped_since(cpu, rtpcp->rcu_watching_snap)) ||
 	    !rcu_tasks_is_holdout(t) ||
 	    (IS_ENABLED(CONFIG_NO_HZ_FULL) &&
 	     !is_idle_task(t) && READ_ONCE(t->rcu_tasks_idle_cpu) >= 0)) {
@@ -1050,7 +1086,6 @@ static void check_holdout_task(struct task_struct *t,
 		pr_err("INFO: rcu_tasks detected stalls on tasks:\n");
 		*firstreport = false;
 	}
-	cpu = task_cpu(t);
 	pr_alert("%p: %c%c nvcsw: %lu/%lu holdout: %d idle_cpu: %d/%d\n",
 		 t, ".I"[is_idle_task(t)],
 		 "N."[cpu < 0 || !tick_nohz_full_cpu(cpu)],
@@ -1120,11 +1155,12 @@ static void tasks_rcu_exit_srcu_stall(struct timer_list *unused)
  * period elapses, in other words after all currently executing RCU
  * read-side critical sections have completed. call_rcu_tasks() assumes
  * that the read-side critical sections end at a voluntary context
- * switch (not a preemption!), cond_resched_tasks_rcu_qs(), entry into idle,
- * or transition to usermode execution.  As such, there are no read-side
- * primitives analogous to rcu_read_lock() and rcu_read_unlock() because
- * this primitive is intended to determine that all tasks have passed
- * through a safe state, not so much for data-structure synchronization.
+ * switch (not a preemption!), cond_resched_tasks_rcu_qs(), entry into
+ * RCU-idle context or transition to usermode execution. As such, there
+ * are no read-side primitives analogous to rcu_read_lock() and
+ * rcu_read_unlock() because this primitive is intended to determine
+ * that all tasks have passed through a safe state, not so much for
+ * data-structure synchronization.
  *
  * See the description of call_rcu() for more detailed information on
  * memory ordering guarantees.
@@ -1142,8 +1178,9 @@ EXPORT_SYMBOL_GPL(call_rcu_tasks);
  * grace period has elapsed, in other words after all currently
  * executing rcu-tasks read-side critical sections have elapsed.  These
  * read-side critical sections are delimited by calls to schedule(),
- * cond_resched_tasks_rcu_qs(), idle execution, userspace execution, calls
- * to synchronize_rcu_tasks(), and (in theory, anyway) cond_resched().
+ * cond_resched_tasks_rcu_qs(), idle execution within RCU-idle context,
+ * userspace execution, calls to synchronize_rcu_tasks(), and (in theory,
+ * anyway) cond_resched().
  *
  * This is a very specialized primitive, intended only for a few uses in
  * tracing and other situations requiring manipulation of function
