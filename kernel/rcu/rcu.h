@@ -609,6 +609,8 @@ void srcutorture_get_gp_data(struct srcu_struct *sp, int *flags,
 
 #ifdef CONFIG_TINY_RCU
 static inline bool rcu_watching_zero_in_eqs(int cpu, int *vp) { return false; }
+static inline bool rcu_watching_snap_in_eqs(int snap) { return false; }
+static inline bool rcu_watching_snap_stopped_since(int cpu, int snap) { return false; }
 static inline unsigned long rcu_get_gp_seq(void) { return 0; }
 static inline unsigned long rcu_exp_batches_completed(void) { return 0; }
 static inline unsigned long
@@ -622,6 +624,8 @@ static inline void rcu_gp_slow_register(atomic_t *rgssp) { }
 static inline void rcu_gp_slow_unregister(atomic_t *rgssp) { }
 #else /* #ifdef CONFIG_TINY_RCU */
 bool rcu_watching_zero_in_eqs(int cpu, int *vp);
+bool rcu_watching_snap_in_eqs(int snap);
+bool rcu_watching_snap_stopped_since(int cpu, int snap);
 unsigned long rcu_get_gp_seq(void);
 unsigned long rcu_exp_batches_completed(void);
 unsigned long srcu_batches_completed(struct srcu_struct *sp);

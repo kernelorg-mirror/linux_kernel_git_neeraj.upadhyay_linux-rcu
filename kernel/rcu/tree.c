@@ -303,7 +303,7 @@ static void rcu_watching_online(void)
  * Return true if the snapshot returned from ct_rcu_watching()
  * indicates that RCU is in an extended quiescent state.
  */
-static bool rcu_watching_snap_in_eqs(int snap)
+bool rcu_watching_snap_in_eqs(int snap)
 {
 	return !(snap & CT_RCU_WATCHING);
 }
@@ -312,16 +312,16 @@ static bool rcu_watching_snap_in_eqs(int snap)
  * rcu_watching_snap_stopped_since() - Has RCU stopped watching a given CPU
  * since the specified @snap?
  *
- * @rdp: The rcu_data corresponding to the CPU for which to check EQS.
+ * @cpu: The CPU for which to check EQS.
  * @snap: rcu_watching snapshot taken when the CPU wasn't in an EQS.
  *
- * Returns true if the CPU corresponding to @rdp has spent some time in an
+ * Returns true if the CPU corresponding has spent some time in an
  * extended quiescent state since @snap. Note that this doesn't check if it
  * /still/ is in an EQS, just that it went through one since @snap.
  *
  * This is meant to be used in a loop waiting for a CPU to go through an EQS.
  */
-static bool rcu_watching_snap_stopped_since(struct rcu_data *rdp, int snap)
+bool rcu_watching_snap_stopped_since(int cpu, int snap)
 {
 	/*
 	 * The first failing snapshot is already ordered against the accesses
@@ -334,7 +334,7 @@ static bool rcu_watching_snap_stopped_since(struct rcu_data *rdp, int snap)
 	if (WARN_ON_ONCE(rcu_watching_snap_in_eqs(snap)))
 		return true;
 
-	return snap != ct_rcu_watching_cpu_acquire(rdp->cpu);
+	return snap != ct_rcu_watching_cpu_acquire(cpu);
 }
 
 /*
@@ -826,7 +826,7 @@ static int rcu_watching_snap_recheck(struct rcu_data *rdp)
 	 * read-side critical section that started before the beginning
 	 * of the current RCU grace period.
 	 */
-	if (rcu_watching_snap_stopped_since(rdp, rdp->watching_snap)) {
+	if (rcu_watching_snap_stopped_since(rdp->cpu, rdp->watching_snap)) {
 		trace_rcu_fqs(rcu_state.name, rdp->gp_seq, rdp->cpu, TPS("dti"));
 		rcu_gpnum_ovf(rnp, rdp);
 		return 1;

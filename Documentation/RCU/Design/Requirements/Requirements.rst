@@ -2611,8 +2611,8 @@ critical sections that are delimited by voluntary context switches, that
 is, calls to schedule(), cond_resched(), and
 synchronize_rcu_tasks(). In addition, transitions to and from
 userspace execution also delimit tasks-RCU read-side critical sections.
-Idle tasks are ignored by Tasks RCU, and Tasks Rude RCU may be used to
-interact with them.
+Idle tasks which are idle from RCU's perspective are ignored by Tasks RCU,
+and Tasks Rude RCU may be used to interact with them.
 
 Note well that involuntary context switches are *not* Tasks-RCU quiescent
 states.  After all, in preemptible kernels, a task executing code in a
@@ -2643,10 +2643,10 @@ moniker.  And this operation is considered to be quite rude by real-time
 workloads that don't want their ``nohz_full`` CPUs receiving IPIs and
 by battery-powered systems that don't want their idle CPUs to be awakened.
 
-Once kernel entry/exit and deep-idle functions have been properly tagged
-``noinstr``, Tasks RCU can start paying attention to idle tasks (except
-those that are idle from RCU's perspective) and then Tasks Rude RCU can
-be removed from the kernel.
+As Tasks RCU now pays attention to idle tasks (except those that are idle
+from RCU's perspective), once kernel entry/exit and deep-idle functions have
+been properly tagged ``noinstr``, Tasks Rude RCU can be removed from the
+kernel.
 
 The tasks-rude-RCU API is also reader-marking-free and thus quite compact,
 consisting solely of synchronize_rcu_tasks_rude().
