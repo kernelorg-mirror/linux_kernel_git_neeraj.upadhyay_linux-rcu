@@ -303,7 +303,7 @@ static void rcu_dynticks_eqs_online(void)
  * Return true if the snapshot returned from rcu_dynticks_snap()
  * indicates that RCU is in an extended quiescent state.
  */
-static bool rcu_dynticks_in_eqs(int snap)
+bool rcu_dynticks_in_eqs(int snap)
 {
 	return !(snap & RCU_DYNTICKS_IDX);
 }
