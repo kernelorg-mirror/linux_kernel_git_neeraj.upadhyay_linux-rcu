@@ -917,9 +917,18 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 
 	cpu = task_cpu(t);
 
-	/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
-	if (t == idle_task(cpu) && !rcu_cpu_online(cpu))
-		return false;
+
+	if (t == idle_task(cpu)) {
+		/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
+		if (!rcu_cpu_online(cpu))
+			return false;
+		/*
+		 * We are in rcu_tasks_kthread() context. Idle thread would
+		 * have done a voluntary context switch.
+		 */
+		if (IS_ENABLED(CONFIG_TINY_RCU))
+			return false;
+	}
 
 	return true;
 }
