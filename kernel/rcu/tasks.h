@@ -922,12 +922,22 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 		/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
 		if (!rcu_cpu_online(cpu))
 			return false;
+#ifdef CONFIG_SMP
+		/*
+		 * Non-running idle tasks are expected to be not in RCU-tasks
+		 * critical section.
+		 * synchronize_rcu() calls in rcu_tasks_pregp_step() and rcu_tasks_postgp()
+		 * ensure that all ->on_cpu transitions are complete.
+		 */
+		if (!t->on_cpu)
+			return false;
+#else
 		/*
 		 * We are in rcu_tasks_kthread() context. Idle thread would
 		 * have done a voluntary context switch.
 		 */
-		if (IS_ENABLED(CONFIG_TINY_RCU))
-			return false;
+		return false;
+#endif
 	}
 
 	return true;
