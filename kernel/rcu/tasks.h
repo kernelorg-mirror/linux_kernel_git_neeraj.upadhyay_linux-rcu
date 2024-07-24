@@ -949,10 +949,11 @@ DEFINE_RCU_TASKS(rcu_tasks, rcu_tasks_wait_gp, call_rcu_tasks, "RCU Tasks");
 /* Per-task initial processing. */
 static void rcu_tasks_pertask(struct task_struct *t, struct list_head *hop)
 {
+	int cpu = task_cpu(t);
+
 	if (t != current && rcu_tasks_is_holdout(t)) {
 #ifndef CONFIG_TINY_RCU
-		if (is_idle_task(t)) {
-			int cpu = task_cpu(t);
+		if (t == idle_task(cpu)) {
 			struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
 
 			/*
@@ -1047,7 +1048,7 @@ static void check_holdout_task(struct task_struct *t,
 	if (!READ_ONCE(t->rcu_tasks_holdout) ||
 	    t->rcu_tasks_nvcsw != READ_ONCE(t->nvcsw) ||
 	    (!IS_ENABLED(CONFIG_TINY_RCU) &&
-	     is_idle_task(t) && rcu_dynticks_in_eqs_since(cpu, rtpcp->dynticks_snap)) ||
+	     (t == idle_task(cpu)) && rcu_dynticks_in_eqs_since(cpu, rtpcp->dynticks_snap)) ||
 	    !rcu_tasks_is_holdout(t) ||
 	    (IS_ENABLED(CONFIG_NO_HZ_FULL) &&
 	     !is_idle_task(t) && READ_ONCE(t->rcu_tasks_idle_cpu) >= 0)) {
