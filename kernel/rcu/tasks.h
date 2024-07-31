@@ -1060,6 +1060,32 @@ static void rcu_tasks_postscan(struct list_head *hop)
 		del_timer_sync(&tasks_rcu_exit_srcu_stall_timer);
 }
 
+static int rcu_tasks_nohz_full_holdout(struct task_struct *t, void *unused)
+{
+	int cpu;
+	int snap;
+
+	cpu = task_cpu(t);
+
+	/* Don't miss EQS exit if the task migrated out and in */
+	smp_rmb();
+
+	snap = ct_rcu_watching_cpu(cpu);
+	if (snap & CT_RCU_WATCHING)
+		return true;
+
+	/* Check if it's the actual task running */
+	smp_rmb();
+
+	if (!task_curr(t))
+		return true;
+
+	/* Make sure the task hasn't migrated in after the above EQS */
+	smp_rmb();
+
+	return ct_rcu_watching_cpu(cpu) != snap;
+}
+
 /* See if tasks are still holding out, complain if so. */
 static void check_holdout_task(struct task_struct *t,
 			       bool needreport, bool *firstreport)
@@ -1073,7 +1099,8 @@ static void check_holdout_task(struct task_struct *t,
 	     rcu_watching_snap_stopped_since(cpu, rtpcp->rcu_watching_snap)) ||
 	    !rcu_tasks_is_holdout(t) ||
 	    (IS_ENABLED(CONFIG_NO_HZ_FULL) &&
-	     !is_idle_task(t) && READ_ONCE(t->rcu_tasks_idle_cpu) >= 0)) {
+	     !is_idle_task(t) && tick_nohz_full_cpu(cpu) &&
+	     !task_call_func(t, rcu_tasks_nohz_full_holdout, NULL))) {
 		WRITE_ONCE(t->rcu_tasks_holdout, false);
 		list_del_init(&t->rcu_tasks_holdout_list);
 		put_task_struct(t);
