@@ -239,8 +239,7 @@ void noinstr ct_nmi_exit(void)
 	ct_kernel_exit_state(CT_RCU_WATCHING);
 	// ... but is no longer watching here.
 
-	if (!in_nmi())
-		rcu_task_exit();
+	rcu_task_exit();
 }
 
 /**
@@ -273,8 +272,7 @@ void noinstr ct_nmi_enter(void)
 	 */
 	if (!rcu_is_watching_curr_cpu()) {
 
-		if (!in_nmi())
-			rcu_task_enter();
+		rcu_task_enter();
 
 		// RCU is not watching here ...
 		ct_kernel_enter_state(CT_RCU_WATCHING);
