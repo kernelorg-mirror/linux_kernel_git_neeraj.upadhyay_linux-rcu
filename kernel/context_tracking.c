@@ -91,6 +91,7 @@ static noinstr void ct_kernel_exit_state(int offset)
 	seq = ct_state_inc(offset);
 	// RCU is no longer watching.  Better be in extended quiescent state!
 	WARN_ON_ONCE(IS_ENABLED(CONFIG_RCU_EQS_DEBUG) && (seq & CT_RCU_WATCHING));
+	rcu_task_exit();
 }
 
 /*
@@ -101,6 +102,8 @@ static noinstr void ct_kernel_exit_state(int offset)
 static noinstr void ct_kernel_enter_state(int offset)
 {
 	int seq;
+
+	rcu_task_enter();
 
 	/*
 	 * CPUs seeing atomic_add_return() must see prior idle sojourns,
@@ -149,7 +152,6 @@ static void noinstr ct_kernel_exit(bool user, int offset)
 	// RCU is watching here ...
 	ct_kernel_exit_state(offset);
 	// ... but is no longer watching here.
-	rcu_task_exit();
 }
 
 /*
@@ -173,7 +175,6 @@ static void noinstr ct_kernel_enter(bool user, int offset)
 		ct->nesting++;
 		return;
 	}
-	rcu_task_enter();
 	// RCU is not watching here ...
 	ct_kernel_enter_state(offset);
 	// ... but is watching here.
@@ -238,9 +239,6 @@ void noinstr ct_nmi_exit(void)
 	// RCU is watching here ...
 	ct_kernel_exit_state(CT_RCU_WATCHING);
 	// ... but is no longer watching here.
-
-	if (!in_nmi())
-		rcu_task_exit();
 }
 
 /**
@@ -272,9 +270,6 @@ void noinstr ct_nmi_enter(void)
 	 * period (observation due to Andy Lutomirski).
 	 */
 	if (!rcu_is_watching_curr_cpu()) {
-
-		if (!in_nmi())
-			rcu_task_enter();
 
 		// RCU is not watching here ...
 		ct_kernel_enter_state(CT_RCU_WATCHING);
