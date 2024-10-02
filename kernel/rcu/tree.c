@@ -303,7 +303,7 @@ static void rcu_watching_online(void)
  * Return true if the snapshot returned from ct_rcu_watching()
  * indicates that RCU is in an extended quiescent state.
  */
-static bool rcu_watching_snap_in_eqs(int snap)
+bool rcu_watching_snap_in_eqs(int snap)
 {
 	return !(snap & CT_RCU_WATCHING);
 }
@@ -321,7 +321,7 @@ static bool rcu_watching_snap_in_eqs(int snap)
  *
  * This is meant to be used in a loop waiting for a CPU to go through an EQS.
  */
-static bool rcu_watching_snap_stopped_since(int cpu, int snap)
+bool rcu_watching_snap_stopped_since(int cpu, int snap)
 {
 	/*
 	 * The first failing snapshot is already ordered against the accesses
