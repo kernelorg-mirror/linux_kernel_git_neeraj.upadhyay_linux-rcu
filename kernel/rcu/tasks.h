@@ -983,6 +983,15 @@ static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 	if (!rcu_cpu_online(cpu))
 		return false;
 
+	/*
+	 * As idle tasks cannot be involuntary preempted, non-running idle tasks
+	 * are not in RCU-tasks critical section.
+	 * synchronize_rcu() calls in rcu_tasks_pregp_step() and rcu_tasks_postgp()
+	 * ensure that all ->on_cpu transitions are complete.
+	 */
+	if (!t->on_cpu)
+		return false;
+
 	return true;
 }
 #else /* #ifdef CONFIG_SMP */
