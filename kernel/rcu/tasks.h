@@ -36,6 +36,8 @@ typedef void (*postgp_func_t)(struct rcu_tasks *rtp);
  * @cpu: CPU number corresponding to this entry.
  * @index: Index of this CPU in rtpcp_array of the rcu_tasks structure.
  * @rtpp: Pointer to the rcu_tasks structure.
+ * @rcu_watching_snap: Per-GP RCU-watching snapshot for idle tasks.
+ * @rcu_watching_snap_rec: RCU-watching snapshot recorded for idle task.
  */
 struct rcu_tasks_percpu {
 	struct rcu_segcblist cblist;
@@ -52,6 +54,8 @@ struct rcu_tasks_percpu {
 	int cpu;
 	int index;
 	struct rcu_tasks *rtpp;
+	int rcu_watching_snap;
+	bool rcu_watching_snap_rec;
 };
 
 /**
@@ -957,9 +961,14 @@ static void rcu_tasks_wait_gp(struct rcu_tasks *rtp)
 // rcu_tasks_pregp_step() and by the scheduler's locks and interrupt
 // disabling.
 
+void call_rcu_tasks(struct rcu_head *rhp, rcu_callback_t func);
+DEFINE_RCU_TASKS(rcu_tasks, rcu_tasks_wait_gp, call_rcu_tasks, "RCU Tasks");
+
 /* Pre-grace-period preparation. */
 static void rcu_tasks_pregp_step(struct list_head *hop)
 {
+	int cpu;
+
 	/*
 	 * Wait for all pre-existing t->on_rq and t->nvcsw transitions
 	 * to complete.  Invoking synchronize_rcu() suffices because all
@@ -974,11 +983,20 @@ static void rcu_tasks_pregp_step(struct list_head *hop)
 	 * grace period.
 	 */
 	synchronize_rcu();
+
+	/* Initialize watching snapshots for this GP */
+	for_each_possible_cpu(cpu) {
+		struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
+
+		rtpcp->rcu_watching_snap_rec = false;
+	}
 }
 
 #ifdef CONFIG_SMP
 static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 {
+	struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
+
 	/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
 	if (!rcu_cpu_online(cpu))
 		return false;
@@ -991,6 +1009,21 @@ static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 	 */
 	if (!t->on_cpu)
 		return false;
+
+	if (!rtpcp->rcu_watching_snap_rec) {
+		/*
+		 * Do plain access. Ordering between remote CPU's pre idle accesses
+		 * and post rcu-tasks grace period is provided by synchronize_rcu()
+		 * in rcu_tasks_postgp().
+		 */
+		rtpcp->rcu_watching_snap = ct_rcu_watching_cpu(cpu);
+		rtpcp->rcu_watching_snap_rec = true;
+		/* RCU-idle contexts are RCU-tasks quiescent state for idle tasks. */
+		if (rcu_watching_snap_in_eqs(rtpcp->rcu_watching_snap))
+			return false;
+	} else if (rcu_watching_snap_stopped_since(cpu, rtpcp->rcu_watching_snap)) {
+		return false;
+	}
 
 	return true;
 }
@@ -1041,9 +1074,6 @@ static void rcu_tasks_pertask(struct task_struct *t, struct list_head *hop)
 		list_add(&t->rcu_tasks_holdout_list, hop);
 	}
 }
-
-void call_rcu_tasks(struct rcu_head *rhp, rcu_callback_t func);
-DEFINE_RCU_TASKS(rcu_tasks, rcu_tasks_wait_gp, call_rcu_tasks, "RCU Tasks");
 
 /* Processing between scanning taskslist and draining the holdout list. */
 static void rcu_tasks_postscan(struct list_head *hop)
