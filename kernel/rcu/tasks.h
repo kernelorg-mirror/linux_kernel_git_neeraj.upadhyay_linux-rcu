@@ -912,14 +912,15 @@ static void rcu_tasks_wait_gp(struct rcu_tasks *rtp)
 ////////////////////////////////////////////////////////////////////////
 //
 // Simple variant of RCU whose quiescent states are voluntary context
-// switch, cond_resched_tasks_rcu_qs(), user-space execution, and idle.
-// As such, grace periods can take one good long time.  There are no
-// read-side primitives similar to rcu_read_lock() and rcu_read_unlock()
-// because this implementation is intended to get the system into a safe
-// state for some of the manipulations involved in tracing and the like.
-// Finally, this implementation does not support high call_rcu_tasks()
-// rates from multiple CPUs.  If this is required, per-CPU callback lists
-// will be needed.
+// switch, cond_resched_tasks_rcu_qs(), user-space execution, and idle
+// tasks which are in RCU-idle context. As such, grace periods can take
+// one good long time.  There are no read-side primitives similar to
+// rcu_read_lock() and rcu_read_unlock() because this implementation is
+// intended to get the system into a safe state for some of the
+// manipulations involved in tracing and the like. Finally, this
+// implementation does not support high call_rcu_tasks() rates from
+// multiple CPUs.  If this is required, per-CPU callback lists will be
+// needed.
 //
 // The implementation uses rcu_tasks_wait_gp(), which relies on function
 // pointers in the rcu_tasks structure.  The rcu_spawn_tasks_kthread()
@@ -1077,14 +1078,6 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 
 	/* Has the task been seen voluntarily sleeping? */
 	if (!READ_ONCE(t->on_rq))
-		return false;
-
-	/*
-	 * Idle tasks (or idle injection) within the idle loop are RCU-tasks
-	 * quiescent states. But CPU boot code performed by the idle task
-	 * isn't a quiescent state.
-	 */
-	if (is_idle_task(t))
 		return false;
 
 	cpu = task_cpu(t);
@@ -1265,11 +1258,12 @@ static void tasks_rcu_exit_srcu_stall(struct timer_list *unused)
  * period elapses, in other words after all currently executing RCU
  * read-side critical sections have completed. call_rcu_tasks() assumes
  * that the read-side critical sections end at a voluntary context
- * switch (not a preemption!), cond_resched_tasks_rcu_qs(), entry into idle,
- * or transition to usermode execution.  As such, there are no read-side
- * primitives analogous to rcu_read_lock() and rcu_read_unlock() because
- * this primitive is intended to determine that all tasks have passed
- * through a safe state, not so much for data-structure synchronization.
+ * switch (not a preemption!), cond_resched_tasks_rcu_qs(), entry into
+ * RCU-idle context or transition to usermode execution. As such, there
+ * are no read-side primitives analogous to rcu_read_lock() and
+ * rcu_read_unlock() because this primitive is intended to determine
+ * that all tasks have passed through a safe state, not so much for
+ * data-structure synchronization.
  *
  * See the description of call_rcu() for more detailed information on
  * memory ordering guarantees.
@@ -1287,8 +1281,9 @@ EXPORT_SYMBOL_GPL(call_rcu_tasks);
  * grace period has elapsed, in other words after all currently
  * executing rcu-tasks read-side critical sections have elapsed.  These
  * read-side critical sections are delimited by calls to schedule(),
- * cond_resched_tasks_rcu_qs(), idle execution, userspace execution, calls
- * to synchronize_rcu_tasks(), and (in theory, anyway) cond_resched().
+ * cond_resched_tasks_rcu_qs(), idle execution within RCU-idle context,
+ * userspace execution, calls to synchronize_rcu_tasks(), and (in theory,
+ * anyway) cond_resched().
  *
  * This is a very specialized primitive, intended only for a few uses in
  * tracing and other situations requiring manipulation of function
