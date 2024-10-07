@@ -976,6 +976,7 @@ static void rcu_tasks_pregp_step(struct list_head *hop)
 	synchronize_rcu();
 }
 
+#ifdef CONFIG_SMP
 static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 {
 	/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
@@ -984,6 +985,17 @@ static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 
 	return true;
 }
+#else /* #ifdef CONFIG_SMP */
+static inline bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
+{
+	/*
+	 * rcu_idle_task_is_holdout() is called in rcu_tasks_kthread()
+	 * context. Idle thread would have done a voluntary context
+	 * switch.
+	 */
+	return false;
+}
+#endif
 
 /* Check for quiescent states since the pregp's synchronize_rcu() */
 static bool rcu_tasks_is_holdout(struct task_struct *t)
