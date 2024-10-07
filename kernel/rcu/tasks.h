@@ -976,6 +976,15 @@ static void rcu_tasks_pregp_step(struct list_head *hop)
 	synchronize_rcu();
 }
 
+static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
+{
+	/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
+	if (!rcu_cpu_online(cpu))
+		return false;
+
+	return true;
+}
+
 /* Check for quiescent states since the pregp's synchronize_rcu() */
 static bool rcu_tasks_is_holdout(struct task_struct *t)
 {
@@ -995,9 +1004,8 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 
 	cpu = task_cpu(t);
 
-	/* Idle tasks on offline CPUs are RCU-tasks quiescent states. */
-	if (t == idle_task(cpu) && !rcu_cpu_online(cpu))
-		return false;
+	if (t == idle_task(cpu))
+		return rcu_idle_task_is_holdout(t, cpu);
 
 	return true;
 }
