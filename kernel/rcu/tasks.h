@@ -38,6 +38,8 @@ typedef void (*postgp_func_t)(struct rcu_tasks *rtp);
  * @rtpp: Pointer to the rcu_tasks structure.
  * @rcu_watching_snap: Per-GP RCU-watching snapshot for idle tasks.
  * @rcu_watching_snap_rec: RCU-watching snapshot recorded for idle task.
+ * @rcu_watching_idle_inj_snap: Per-GP RCU-watching snapshot for idle inject task.
+ * @rcu_watching_idle_inj_rec: RCU-watching snapshot recorded for idle inject task.
  */
 struct rcu_tasks_percpu {
 	struct rcu_segcblist cblist;
@@ -56,6 +58,8 @@ struct rcu_tasks_percpu {
 	struct rcu_tasks *rtpp;
 	int rcu_watching_snap;
 	bool rcu_watching_snap_rec;
+	int rcu_watching_idle_inj_snap;
+	bool rcu_watching_idle_inj_rec;
 };
 
 /**
@@ -989,10 +993,34 @@ static void rcu_tasks_pregp_step(struct list_head *hop)
 		struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
 
 		rtpcp->rcu_watching_snap_rec = false;
+		rtpcp->rcu_watching_idle_inj_rec = false;
 	}
 }
 
 #ifdef CONFIG_SMP
+static bool rcu_idle_check_rcu_watching(int *rcu_watching_snap, bool *rcu_watching_rec, int cpu)
+{
+	if (!*rcu_watching_rec) {
+		/*
+		 * Do plain access. Ordering between remote CPU's pre idle accesses
+		 * and post rcu-tasks grace period is provided by synchronize_rcu()
+		 * in rcu_tasks_postgp().
+		 */
+		*rcu_watching_snap = ct_rcu_watching_cpu(cpu);
+		*rcu_watching_rec = true;
+		if (rcu_watching_snap_in_eqs(*rcu_watching_snap))
+			/*
+			 * RCU-idle contexts are RCU-tasks quiescent state for idle
+			 * (and idle injection) tasks.
+			 */
+			return false;
+	} else if (rcu_watching_snap_stopped_since(cpu, *rcu_watching_snap)) {
+		return false;
+	}
+
+	return true;
+}
+
 static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 {
 	struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
@@ -1010,22 +1038,16 @@ static bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 	if (!t->on_cpu)
 		return false;
 
-	if (!rtpcp->rcu_watching_snap_rec) {
-		/*
-		 * Do plain access. Ordering between remote CPU's pre idle accesses
-		 * and post rcu-tasks grace period is provided by synchronize_rcu()
-		 * in rcu_tasks_postgp().
-		 */
-		rtpcp->rcu_watching_snap = ct_rcu_watching_cpu(cpu);
-		rtpcp->rcu_watching_snap_rec = true;
-		/* RCU-idle contexts are RCU-tasks quiescent state for idle tasks. */
-		if (rcu_watching_snap_in_eqs(rtpcp->rcu_watching_snap))
-			return false;
-	} else if (rcu_watching_snap_stopped_since(cpu, rtpcp->rcu_watching_snap)) {
-		return false;
-	}
+	return rcu_idle_check_rcu_watching(&rtpcp->rcu_watching_snap,
+			&rtpcp->rcu_watching_snap_rec, cpu);
+}
 
-	return true;
+static bool rcu_idle_inj_is_holdout(struct task_struct *t, int cpu)
+{
+	struct rcu_tasks_percpu *rtpcp = per_cpu_ptr(rcu_tasks.rtpcpu, cpu);
+
+	return rcu_idle_check_rcu_watching(&rtpcp->rcu_watching_idle_inj_snap,
+			&rtpcp->rcu_watching_idle_inj_rec, cpu);
 }
 #else /* #ifdef CONFIG_SMP */
 static inline bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
@@ -1034,6 +1056,15 @@ static inline bool rcu_idle_task_is_holdout(struct task_struct *t, int cpu)
 	 * rcu_idle_task_is_holdout() is called in rcu_tasks_kthread()
 	 * context. Idle thread would have done a voluntary context
 	 * switch.
+	 */
+	return false;
+}
+
+static inline bool rcu_idle_inj_is_holdout(struct task_struct *t, int cpu)
+{
+	/*
+	 * Idle injection tasks are PF_IDLE within preempt disabled
+	 * region. So, we should not enter this call for !SMP.
 	 */
 	return false;
 }
@@ -1060,6 +1091,8 @@ static bool rcu_tasks_is_holdout(struct task_struct *t)
 
 	if (t == idle_task(cpu))
 		return rcu_idle_task_is_holdout(t, cpu);
+	else if (is_idle_task(t))
+		return rcu_idle_inj_is_holdout(t, cpu);
 
 	return true;
 }
