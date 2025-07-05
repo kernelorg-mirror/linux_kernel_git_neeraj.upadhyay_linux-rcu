@@ -660,14 +660,12 @@ static void rcu_preempt_deferred_qs_handler(struct irq_work *iwp)
  * @t: The task being checked
  * @rdp: The per-CPU RCU data
  * @rnp: The RCU node for this CPU
- * @irqs_were_disabled: Whether interrupts were disabled before rcu_read_unlock()
  *
  * Returns true if expedited processing of the rcu_read_unlock() is needed.
  */
 static bool rcu_unlock_needs_exp_handling(struct task_struct *t,
 				      struct rcu_data *rdp,
-				      struct rcu_node *rnp,
-				      bool irqs_were_disabled)
+				      struct rcu_node *rnp)
 {
 	/*
 	 * Check if this task is blocking an expedited grace period.
@@ -693,7 +691,7 @@ static bool rcu_unlock_needs_exp_handling(struct task_struct *t,
 	 * disturbing the system more. Check if either:
 	 * - This CPU has not yet reported a quiescent state, or
 	 * - This task was preempted within an RCU critical section
-	 * In either case, requird expedited handling for strict GP mode.
+	 * In either case, require expedited handling for strict GP mode.
 	 */
 	if (IS_ENABLED(CONFIG_RCU_STRICT_GRACE_PERIOD) &&
 	    ((rdp->grpmask & READ_ONCE(rnp->qsmask)) || t->rcu_blocked_node))
@@ -701,14 +699,14 @@ static bool rcu_unlock_needs_exp_handling(struct task_struct *t,
 
 	/*
 	 * RCU priority boosting case: If a task is subject to RCU priority
-	 * boosting and exits an RCU read-side critical section with interrupts
-	 * disabled, we need expedited handling to ensure timely deboosting.
-	 * Without this, a low-priority task could incorrectly run at high
-	 * real-time priority for an extended period effecting real-time
-	 * responsiveness. This applies to all CONFIG_RCU_BOOST=y kernels,
-	 * not just PREEMPT_RT.
+	 * boosting and exits an RCU read-side critical section, we need
+	 * expedited handling to ensure timely deboosting. Without this,
+	 * a low-priority task could incorrectly run at high real-time
+	 * priority for an extended period effecting real-time
+	 * responsiveness. This applies to all RCU_BOOST=y kernels,
+	 * not just to PREEMPT_RT.
 	 */
-	if (IS_ENABLED(CONFIG_RCU_BOOST) && irqs_were_disabled && t->rcu_blocked_node)
+	if (IS_ENABLED(CONFIG_RCU_BOOST) && t->rcu_blocked_node)
 		return true;
 
 	return false;
@@ -737,7 +735,7 @@ static void rcu_read_unlock_special(struct task_struct *t)
 		struct rcu_data *rdp = this_cpu_ptr(&rcu_data);
 		struct rcu_node *rnp = rdp->mynode;
 
-		needs_exp = rcu_unlock_needs_exp_handling(t, rdp, rnp, irqs_were_disabled);
+		needs_exp = rcu_unlock_needs_exp_handling(t, rdp, rnp);
 	
 		// Need to defer quiescent state until everything is enabled.
 		if (use_softirq && (in_hardirq() || (needs_exp && !irqs_were_disabled))) {
